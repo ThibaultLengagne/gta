@@ -152,7 +152,7 @@ function init_auth() {
 # kill current proxy
 #######################################
 function kill_proxy() {
-  ps aux | grep  "python3 start_mitm_proxy.py" | grep -v grep | awk '{print $2}' | xargs -I{} kill {}
+  ps aux | grep  "python3 $PROJECT_ROOT/start_mitm_proxy.py" | grep -v grep | awk '{print $2}' | xargs -I{} kill {}
 }
 
 #######################################
@@ -206,7 +206,7 @@ EOF
   gcloud config configurations activate mitm 2>/dev/null
 
   ech info "Configured mitm proxy on port $proxy_port"
-  python3 start_mitm_proxy.py --token $gcloud_token --port $proxy_port &
+  python3 $PROJECT_ROOT/start_mitm_proxy.py --token $gcloud_token --port $proxy_port &
   ech debug "PID : [$!]"
 }
 
