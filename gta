@@ -1,13 +1,5 @@
 #!/bin/bash -e
-#
-# Generic Shell Script Skeleton.
-# Example: Verbosity
-# Copyright (c) 2015 - Jeremias Longo <jeremias@pikel.org>
-
-#!/bin/bash -e
-#
-# Common utilities for scripts
-# Copyright (c) 2015 - Jeremias Longo <jeremias@pikel.org>
+# Inspired by Generic Shell Script Skeleton.
 
 #######################################
 # CONSTANTS & VARIABLES
