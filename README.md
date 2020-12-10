@@ -1,4 +1,4 @@
-# GTA - Gcloud Theft Auto
+# GTA - Gcloud Token Accessor
 
 This tool can be used to impersonate anyone given its access token. I have not found a built-in way to do this with gcloud cli.
 
