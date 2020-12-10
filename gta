@@ -1,0 +1,354 @@
+#!/bin/bash -e
+#
+# Generic Shell Script Skeleton.
+# Example: Verbosity
+# Copyright (c) 2015 - Jeremias Longo <jeremias@pikel.org>
+
+#!/bin/bash -e
+#
+# Common utilities for scripts
+# Copyright (c) 2015 - Jeremias Longo <jeremias@pikel.org>
+
+#######################################
+# CONSTANTS & VARIABLES
+#######################################
+# Script version
+readonly VERSION=0.1
+
+# List of required tools, example: REQUIRED_TOOLS=(git ssh)
+readonly REQUIRED_TOOLS=()
+
+# Project Root Dir
+readonly PROJECT_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+
+# Verbose Levels
+readonly VERBOSE_LEVELS=(none fatal error warning info debug)
+
+# Level Colors
+readonly LEVEL_COLORS=(39 31 31 33 32 36)
+
+# Defaults Verbose Level - 0 none, 1 fatal, 2 error, 3 warning, 4 info, 5 debug
+readonly VERBOSE_DEFAULT=4
+
+# Script name
+readonly SCRIPT_NAME=${0##*/}
+
+# Current verbose level
+declare -i verbose_level="$VERBOSE_DEFAULT"
+
+# Current gcloud config
+declare gcloud_config="default"
+declare gcloud_project="whatever"
+declare gcloud_token=""
+declare gcloud_account=""
+
+declare -i proxy_port=8080
+
+#######################################
+# FUNCTIONS
+#######################################
+
+# trap ctrl-c and call ctrl_c()
+trap ctrl_c INT
+
+function ctrl_c() {
+  _exit
+}
+
+# Print out error messages to STDERR.
+function err() {
+  [[ $verbose_level -ge 1 ]] \
+    && echo -e "\033[0;${LEVEL_COLORS[1]}mERROR: $@\033[0m" >&2
+}
+
+# Print out messages with given verbose level to STDERR.
+function ech() {
+  local level=4 # Default Info
+  if [[ $# -gt 1 ]]; then
+    for lvl in "${!VERBOSE_LEVELS[@]}"; do
+      [[ "${VERBOSE_LEVELS[$lvl]}" = "$1" ]] && level="${lvl}" && break
+    done
+    shift
+  fi
+  [[ $level = 0 || $level -gt $verbose_level ]] && return
+  tag=$(echo ${VERBOSE_LEVELS[$level]} | tr "a-z" "A-Z" )
+  echo -e "\033[0;${LEVEL_COLORS[$level]}m[$tag]: $@\033[0m" >&2
+}
+
+# Set verbose level index. Must be a standard logging verbosity level:
+# debug, info, warning, error, fatal, none.
+function verbosity() {
+  for level in "${!VERBOSE_LEVELS[@]}"; do
+    [[ "${VERBOSE_LEVELS[$level]}" = "$1" ]] && verbose_level="${level}" && return
+  done
+  ech warning "Invalid Verbosity Level '$1'"
+}
+
+# Shows an error if required tools are not installed.
+function required {
+  local e=0
+  for tool in "$@"; do
+    type $tool >/dev/null 2>&1 || {
+      e=1 && err "$tool is required for running this script. Please install $tool and try again."
+    }
+  done
+  [[ $e < 1 ]] || exit 2
+}
+
+#######################################
+# help command
+#######################################
+function help_command() {
+  cat <<END;
+
+  # First set variable
+  set token $TOKEN          : set gcloud token to $TOKEN 
+  set account $ACCOUNT      : set gcloud account to $ACCOUNT 
+  set project $PROJECT      : set gcloud project to $PROJECT 
+  [Optional] set port $PORT : set the proxy listening port to $PORT
+
+  # Then enjoy !
+  help                 : Display this help
+  start                : Start a proxy on port 8080, and set gcloud to go through it
+  stop                 : Stop the proxy and restore gcloud configuration
+  current              : Get current gcloud config
+  gcloud [ANY COMMAND] : execute gcloud in the given gta contect
+  exit                 : Exit properly
+
+
+END
+}
+
+#######################################
+# check for mitmproxy library
+#######################################
+function check_if_mitmproxy() {
+  # set default command here
+  python3 -c "import mitmproxy"
+  if [ $? -eq 0 ]; then
+    gcloud_config=$(gcloud config configurations list | grep True | awk '{print $1}')
+    ech info "Current gcloud configuration : $gcloud_config"
+  else
+      ech err "You need to have python3 mitmproxy library."
+      ech err "Please run \"pip3 install mitmproxy\""
+  fi
+}
+
+function init_auth() {
+
+  gcloud_account=$(gcloud config list 2>/dev/null | grep account | awk '{print $3}')
+  gcloud_project=$(gcloud config list 2>/dev/null | grep project | awk '{print $3}')
+
+  if [[ "$gcloud_account" == "" ]] 
+  then 
+    ech error "Please login on gcloud with ANY account"
+    ech error "$ gcloud auth login"
+    exit 1
+  fi
+
+}
+
+#######################################
+# kill current proxy
+#######################################
+function kill_proxy() {
+  ps aux | grep  "python3 start_mitm_proxy.py" | grep -v grep | awk '{print $2}' | xargs -I{} kill {}
+}
+
+#######################################
+# version command
+#######################################
+function version_command() {
+  echo "$SCRIPT_NAME version $VERSION"
+}
+
+#######################################
+# current configuration
+#######################################
+function current() {
+  # set default command here
+  current_config=$(gcloud config configurations list | grep True | awk '{print $1}')
+  ech info "Current gcloud configuration : $current_config"
+}
+
+#######################################
+# start proxy
+#######################################
+function restart_proxy() {
+
+  if [[ "$gcloud_token" == "" ]]
+  then
+    ech error "You must set a gcloud token first"
+    return
+  fi
+
+  if [[ "$gcloud_project" == "" ]]
+  then
+    ech error "You must set a gcloud project first"
+    return
+  fi
+
+  ech debug "Changing gcloud configuration"
+
+cat << EOF > ~/.config/gcloud/configurations/config_mitm
+[core]
+account = $gcloud_account
+project = $gcloud_project
+custom_ca_certs_file = $PROJECT_ROOT/mitmproxy-ca-cert.pem
+
+[proxy]
+address = 127.0.0.1
+port = $proxy_port
+type = http
+EOF
+
+  kill_proxy
+  gcloud config configurations activate mitm 2>/dev/null
+
+  ech info "Configured mitm proxy on port $proxy_port"
+  python3 start_mitm_proxy.py --token $gcloud_token --port $proxy_port &
+  ech debug "PID : [$!]"
+}
+
+#######################################
+# stop proxy
+#######################################
+function stop_proxy() {
+  ech info "Stopping proxy"
+  kill_proxy
+
+  ech info "Restoring gcloud configuration to $gcloud_config"
+  rm ~/.config/gcloud/configurations/config_mitm 2>/dev/null
+  gcloud config configurations activate $gcloud_config 2>/dev/null
+
+}
+
+#######################################
+# set gcloud variables
+#######################################
+function set_token() {
+  gcloud_token=$1
+  ech info "gcloud token set."
+  restart_proxy
+}
+function set_project() {
+  gcloud_project=$1
+  ech info "gcloud project set."
+  restart_proxy
+}
+function set_port() {
+  proxy_port=$1
+  ech info "proxy port set to $proxy_port"
+}
+
+#######################################
+# show variables
+#######################################
+function env() {
+  ech info "project : $gcloud_project"
+  ech info "token : $gcloud_token"
+  ech info "port : $proxy_port"
+}
+
+#######################################
+# execute gcloud command
+#######################################
+function execute_gcloud() {
+
+  if [[ "$gcloud_token" == "" ]]
+  then
+    ech warning "You have not set a token, so you are not impersonating anyone"
+    ech warning "Please use 'set token \$TOKEN'"
+  else
+    if [[ $1 == "auth"  ]]
+    then
+      ech warning "The google auth command will return false information"
+      ech warning "You will get your account identity, instead of token"
+    fi
+  fi
+
+  # Let it reload properly
+  sleep 0.5
+  
+  # Execute gcloud
+  if gcloud $@
+  then :
+  fi
+}
+
+#######################################
+# exit
+#######################################
+function _exit() {
+  stop_proxy
+  ech info "Bye Bye"
+  exit 0
+}
+
+#######################################
+#
+# MAIN
+#
+#######################################
+function main() {
+
+  # No more arguments -> call default command
+  [[ -z "$1" ]] && return
+
+  # Parse cmdline. Command will be the first argument, and args will be the others
+  cmdline=( $1 )
+  command=${cmdline[0]}
+  args=( ${cmdline[@]:1:${#cmdline[@]}} )
+
+  # Execute the command
+  case "$command" in
+
+    # Basic commands
+    help)     help_command ;;
+    version)  version_command ;;
+    env)     env ;;
+    exit)      _exit ;;
+    current)  current ;;
+
+    # set a variable
+    set)
+      case "${args[0]}" in
+        token)  set_token ${args[1]} ;;
+        project)  set_project ${args[1]} ;;
+        port)     set_port ${args[1]} ;;
+        *)  err "Unknown variable ${args[0]}"
+      esac ;;
+
+    # gcloud command
+    gcloud)
+      gcloud_cmd=${args[*]}
+      execute_gcloud $gcloud_cmd ;;
+
+    # Unknown command
+    *)        err "Unknown command '$command'";;
+  esac
+}
+#######################################
+# Run the script
+#######################################
+# main "$@"
+MY_PROMPT='gta> '
+
+# Required tools
+required $REQUIRED_TOOLS
+
+# Required : python3 mitmproxy library
+check_if_mitmproxy
+
+# Required : Be connected on gcloud with ANY account
+init_auth
+
+while :
+do
+  echo -n "$MY_PROMPT"
+  read line
+  main "$line"
+done
+
+exit 0
+
